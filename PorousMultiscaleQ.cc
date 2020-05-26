@@ -23,6 +23,8 @@
 #include <deal.II/numerics/matrix_tools.h>
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/lac/dynamic_sparsity_pattern.h>
+#include <fstream>
+#include <vector>
 #include <algorithm>
 #include <iostream>
 #include <iomanip>
@@ -44,7 +46,7 @@ using namespace dealii;
  * -Initialize rhs vector
  */
 
-// Note: the assembly is hard to split up due to requirements for access to the 
+// Note: the assembly is hard to split up due to requirements for access to the coarse data
 /* Assemble system
  * -No need for global gaussian quadrature
  * -Initialize DOFs per cell, etc.
@@ -60,8 +62,6 @@ using namespace dealii;
  *  -Compute the multiscale basis function inner products and assemble them into the global problem
  *  -Compute the multiscale basis function inner product against f
  */
-
-
 
 /* Solve
  * -Should be solvable with CG
@@ -79,6 +79,8 @@ using namespace dealii;
  * -Can output individual snapshots for now
  */
 
+#define GRAHAM_DEBUG_LEVEL 0
+
 
 
 // Define the RHS for various choices
@@ -88,23 +90,23 @@ class RightHandSide_SinSin : public Function<dim>
 {
 public:
   virtual double value(const Point<dim> & p,
-      const unsigned int component = 0) const override;
+                       const unsigned int component = 0) const override;
 };
 
 template <int dim>
 double RightHandSide_SinSin<dim>::value(const Point<dim> &p,
-    const unsigned int /*component*/) const
-    {
+                                        const unsigned int /*component*/) const
+{
   double pi = numbers::PI;
 
-  double return_value = 1;
+  double return_value = 1.0;
   for(unsigned int d=0; d<dim; ++d)
     return_value *= std::sin(pi * p[d]);
 
   return_value *= dim*pi*pi;
 
   return return_value;
-    }
+}
 
 
 
@@ -115,21 +117,21 @@ class ExactSolution_SinSin : public Function<dim>
 {
 public:
   virtual double value(const Point<dim> & p,
-      const unsigned int component = 0) const override;
+                       const unsigned int component = 0) const override;
 };
 
 template <int dim>
 double ExactSolution_SinSin<dim>::value(const Point<dim> &p,
-    const unsigned int /*component*/) const
-    {
+                                        const unsigned int /*component*/) const
+{
   double pi = numbers::PI;
 
-  double return_value = 1;
+  double return_value = 1.0;
   for(unsigned int d=0; d<dim; ++d)
     return_value *= std::sin(pi * p[d]);
 
   return return_value;
-    }
+}
 
 
 
@@ -141,7 +143,7 @@ class BoundaryValues_MS : public Function<dim>
 {
 public:
   BoundaryValues_MS(std::vector<Point<dim>> subgrid_corners,
-      const unsigned int shape_index)
+                    const unsigned int shape_index)
 : vertices(subgrid_corners)
 , index(shape_index)
 {
@@ -173,7 +175,7 @@ public:
 }
 
   virtual double value(const Point<dim> & p,
-      const unsigned int component = 0) const override;
+                       const unsigned int component = 0) const override;
 
 private:
   const std::vector<Point<dim>> vertices;
@@ -184,8 +186,8 @@ private:
 
 template <int dim>
 double BoundaryValues_MS<dim>::value(const Point<dim> &p,
-    const unsigned int /*component*/) const
-    {
+                                     const unsigned int /*component*/) const
+{
   const double x = p[0];
   const double y = p[1];
   const double xhat = a[0] + a[1]*x + a[2]*y + a[3]*x*y;
@@ -201,7 +203,7 @@ double BoundaryValues_MS<dim>::value(const Point<dim> &p,
                                + corner_values(3)*xhat*yhat;
 
   return shape_value;
-    }
+}
 
 
 
@@ -255,7 +257,7 @@ PorousMultiscale<dim>::PorousMultiscale(const unsigned int polynomial_degree,
       , poly_deg(polynomial_degree)
       , num_coarse_refinements(coarse_refinements)
       , num_fine_refinements(fine_refinements)
-      {
+{
   std::cout << "============================" 
       << std::endl
       << "PorousMultiscale with"
@@ -265,7 +267,7 @@ PorousMultiscale<dim>::PorousMultiscale(const unsigned int polynomial_degree,
       << std::endl
       << "============================"
       << std::endl;
-      }
+}
 
 
 
@@ -309,7 +311,6 @@ void PorousMultiscale<dim>::assemble()
   // do nothing for now
 
   const unsigned int snapshots_per_cell = 4; // change this later to allow more extensibility
-  bool drew_output = false;
 
   // loop over the coarse cells
   for (const auto &coarse_cell : coarse_dof_handler.active_cell_iterators())
@@ -352,7 +353,7 @@ void PorousMultiscale<dim>::assemble()
     fine_sparsity_pattern.copy_from(dsp);
     fine_matrix.reinit(fine_sparsity_pattern);
 
-#if false
+#if GRAHAM_DEBUG_LEVEL > 2
     std::cout << "  Subgrid number of active cells: " << fine_mesh.n_active_cells()
                     << std::endl
                     << "  Subgrid total number of cells: " << fine_mesh.n_cells()
@@ -399,9 +400,11 @@ void PorousMultiscale<dim>::assemble()
               local_dof_indices[j],
               fine_local_matrix(i, j));
 
+#if GRAHAM_DEBUG_LEVEL > 1
       for (unsigned int i = 0; i < 4; ++i)
         for (unsigned int j = 0; j < 4; ++j)
           std::cout << "Fine local matrix(" << i << "," << j << ") = " << fine_local_matrix(i,j) << std::endl;
+#endif
     }
 
     // loop over snapshots, since all that changes is the boundary conditions
@@ -455,15 +458,40 @@ void PorousMultiscale<dim>::assemble()
         grid_out.set_flags(svg_flags);
         std::ofstream grid_name("fine_mesh.svg");
         grid_out.write_svg(fine_mesh, grid_name);
+      }
 
+      bool drew_output = false;
+      bool write_snapshots = false;
+      if(write_snapshots && !drew_output)
+      {
         DataOut<dim> data_out;
         data_out.attach_dof_handler(fine_dof_handler);
         data_out.add_data_vector(fine_solution, "solution");
         data_out.build_patches();
-        std::ofstream output("fine_solution_0.vtk");
-        data_out.write_vtk(output);
 
-        drew_output = true;
+        if(i_snapshot == 0)
+        {
+          std::ofstream output("fine_solution_0.vtk");
+          data_out.write_vtk(output);
+        }
+        if(i_snapshot == 1)
+        {
+          std::ofstream output("fine_solution_1.vtk");
+          data_out.write_vtk(output);
+        }
+        if(i_snapshot == 2)
+        {
+          std::ofstream output("fine_solution_2.vtk");
+          data_out.write_vtk(output);
+        }
+        if(i_snapshot == 3)
+        {
+          std::ofstream output("fine_solution_3.vtk");
+          data_out.write_vtk(output);
+        }
+
+        if(i_snapshot == 3)
+          drew_output = true;
       }
     }
 
@@ -485,21 +513,26 @@ void PorousMultiscale<dim>::assemble()
         const Point<dim> x_q = fe_values.quadrature_point(q);
         double right_hand_side_value = right_hand_side.value(x_q);
         for (unsigned int i_snapshot = 0; i_snapshot < 4; ++i_snapshot)
-          for (unsigned int j_snapshot = 0; j_snapshot < 4; ++j_snapshot)
-            for (unsigned int i = 0; i < dofs_per_cell; ++i)
-            {
-              const Tensor<1, dim> grad_phi_i = snapshot_solutions[snapshot_solutions.size() - 4 + i_snapshot][local_dof_indices[i]]*fe_values.shape_grad(i, q);
+          for (unsigned int i = 0; i < dofs_per_cell; ++i)
+          {
+            const Tensor<1, dim> grad_phi_i = snapshot_solutions[snapshot_solutions.size() - 4 + i_snapshot][local_dof_indices[i]]*fe_values.shape_grad(i, q);
+            for (unsigned int j_snapshot = 0; j_snapshot < 4; ++j_snapshot)
               for (unsigned int j = 0; j < dofs_per_cell; ++j)
               {
                 const Tensor<1, dim> grad_phi_j = snapshot_solutions[snapshot_solutions.size() - 4 + j_snapshot][local_dof_indices[j]]*fe_values.shape_grad(j, q);
+
                 coarse_local_matrix(i_snapshot, j_snapshot) += (grad_phi_i * grad_phi_j) * fe_values.JxW(q);
 
-
-                local_rhs(j) += (snapshot_solutions[snapshot_solutions.size() - 4 + j_snapshot][local_dof_indices[j]]*fe_values.shape_value(j, q) * right_hand_side_value) *
-                    fe_values.JxW(q);
+#if GRAHAM_DEBUG_LEVEL > 4
+                std::cout << "Snapshot coefficient i [" << (snapshot_solutions.size() - 4 + i_snapshot) << "][" << local_dof_indices[i] << "] = " << snapshot_solutions[snapshot_solutions.size() - 4 + i_snapshot][local_dof_indices[i]] << std::endl;
+                std::cout << "Snapshot coefficient j [" << (snapshot_solutions.size() - 4 + j_snapshot) << "][" << local_dof_indices[j] << "] = " << snapshot_solutions[snapshot_solutions.size() - 4 + j_snapshot][local_dof_indices[j]] << std::endl;
+#endif
               }
+
+              local_rhs(i) += (snapshot_solutions[snapshot_solutions.size() - 4 + i_snapshot][local_dof_indices[i]]*fe_values.shape_value(i, q) * right_hand_side_value) *
+                  fe_values.JxW(q);
             }
-      }
+        }
     }
 
     coarse_cell->get_dof_indices(local_dof_indices);
@@ -511,12 +544,13 @@ void PorousMultiscale<dim>::assemble()
     for (unsigned int j = 0; j < 4; ++j)
       coarse_rhs(local_dof_indices[j]) += local_rhs(j);
 
-
+#if GRAHAM_DEBUG_LEVEL > 1
     for (unsigned int i = 0; i < 4; ++i)
       for (unsigned int j = 0; j < 4; ++j)
         std::cout << "Coarse local matrix(" << i << "," << j << ") = " << coarse_local_matrix(i,j) << std::endl;
 
     std::cout << "Coarse local rhs = " << local_rhs << std::endl;
+#endif
 
     ////////////////////////////////////////////////////////////////////////////
     // End the subgrid problem
@@ -537,11 +571,13 @@ void PorousMultiscale<dim>::assemble()
         coarse_rhs);
   }
 
+#if GRAHAM_DEBUG_LEVEL > 0
   std::cout << "Snapshots saved: " << snapshot_solutions.size() << std::endl;
   for (unsigned int i = 0; i < snapshot_solutions.size(); ++i)
   {
     std::cout << "Snapshot solution " << i << " = " << snapshot_solutions[i] << std::endl;
   }
+#endif
 }
 
 
@@ -598,23 +634,24 @@ void PorousMultiscale<dim>::compute_errors()
     // setup dof handler
     fine_dof_handler.distribute_dofs(fine_fe);
 
-    // setup degree 3 quadrature and access to shape functions using FEValues
+    // setup degree 3 quadrature and access to shape functions using FEValues; this should avoid spurious superconvergences
     QGauss<dim> quadrature_formula(3);
     FEValues<dim> fe_values(fine_fe, quadrature_formula,
-        update_values | update_gradients | update_quadrature_points | update_JxW_values);
+        update_values | update_quadrature_points | update_JxW_values);
 
     // count variables for loops
     const unsigned int dofs_per_cell   = fine_fe.dofs_per_cell;
     const unsigned int n_q_points      = quadrature_formula.size();
 
-    std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
+    std::vector<types::global_dof_index> local_coarse_dof_indices(4);
+    coarse_cell->get_dof_indices(local_coarse_dof_indices);
+    std::vector<types::global_dof_index> local_fine_dof_indices(dofs_per_cell);
 
     // construct the matrix for this subgrid once, then solve depending on different boundary conditions
     for (const auto &fine_cell : fine_dof_handler.active_cell_iterators())
     {
       fe_values.reinit(fine_cell);
-      coarse_cell->get_dof_indices(local_dof_indices);
-
+      fine_cell->get_dof_indices(local_fine_dof_indices);
 
       for (unsigned int q = 0; q < n_q_points; ++q)
       {
@@ -623,10 +660,10 @@ void PorousMultiscale<dim>::compute_errors()
         {
           // use all 4 snapshots for this shape function
           // then use all shape functions on this cell
-          numerical_solution_value += (snapshot_solutions[4*k][local_dof_indices[i]]
-                                      +snapshot_solutions[4*k+1][local_dof_indices[i]]
-                                      +snapshot_solutions[4*k+2][local_dof_indices[i]]
-                                      +snapshot_solutions[4*k+3][local_dof_indices[i]])*fe_values.shape_value(i, q);
+          numerical_solution_value += (coarse_solution[local_coarse_dof_indices[0]]*snapshot_solutions[4*k][local_fine_dof_indices[i]]
+                                      +coarse_solution[local_coarse_dof_indices[1]]*snapshot_solutions[4*k+1][local_fine_dof_indices[i]]
+                                      +coarse_solution[local_coarse_dof_indices[2]]*snapshot_solutions[4*k+2][local_fine_dof_indices[i]]
+                                      +coarse_solution[local_coarse_dof_indices[3]]*snapshot_solutions[4*k+3][local_fine_dof_indices[i]])*fe_values.shape_value(i, q);
         }
 
         const Point<dim> x_q = fe_values.quadrature_point(q);
@@ -640,6 +677,7 @@ void PorousMultiscale<dim>::compute_errors()
 
     ++k;
   }
+
   double L2_error = 0;
   for (unsigned int k = 0; k < cell_L2_error.size(); ++k)
     L2_error += cell_L2_error(k)*cell_L2_error(k);
@@ -657,6 +695,14 @@ void PorousMultiscale<dim>::output_results()
   // TODO
   // DataOut likes to have only 1 DOF handler and only 1 solution
   // I need to brainstorm an appropriate way to take many fine DOF handlers and combine their numerical outputs into a single large output
+
+  // For now, write only the coefficients of the multiscale basis functions
+  DataOut<dim> data_out;
+  data_out.attach_dof_handler(coarse_dof_handler);
+  data_out.add_data_vector(coarse_solution, "solution");
+  data_out.build_patches();
+  std::ofstream output("coarse_solution.vtk");
+  data_out.write_vtk(output);
 }
 
 
@@ -681,7 +727,9 @@ int main()
   {
     std::cout.precision(6);
     // run the 2d problem with Q1, 4 coarse and 4 fine refinements
-    PorousMultiscale<2>(1,2,2).run();
+    for (unsigned int coarse_refinement_level = 4; coarse_refinement_level < 5; coarse_refinement_level++)
+      for (unsigned int fine_refinement_level = 4; fine_refinement_level < 5; fine_refinement_level++)
+        PorousMultiscale<2>(1,coarse_refinement_level,fine_refinement_level).run();
   }
   catch (std::exception &exc)
   {
