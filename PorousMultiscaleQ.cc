@@ -3,6 +3,7 @@
 #include <deal.II/base/function.h>
 #include <deal.II/base/logstream.h>
 #include <deal.II/base/table_handler.h>
+#include <deal.II/base/timer.h>
 #include <deal.II/lac/vector.h>
 #include <deal.II/lac/sparse_matrix.h>
 #include <deal.II/lac/solver_cg.h>
@@ -690,9 +691,19 @@ int main()
     std::cout.precision(6);
     // run the 2d problem with Q1, 4 coarse and 4 fine refinements
     const unsigned int poly_degree = 1;
-    for (unsigned int coarse_refinement_level = 3; coarse_refinement_level < 4; coarse_refinement_level++)
-      for (unsigned int fine_refinement_level = 3; fine_refinement_level < 4; fine_refinement_level++)
+    for (unsigned int coarse_refinement_level = 1; coarse_refinement_level < 6; coarse_refinement_level++)
+      for (unsigned int fine_refinement_level = 1; fine_refinement_level < 6; fine_refinement_level++)
+      {
+        Timer timer;
+        timer.start();
+
         PorousMultiscale<2>(poly_degree,coarse_refinement_level,fine_refinement_level).run();
+
+        timer.stop();
+
+        //std::cout << "Elapsed CPU time: " << timer() << " seconds.";
+        std::cout << "Elapsed wall time: " << timer.wall_time() << " seconds." << std::endl;
+      }
   }
   catch (std::exception &exc)
   {
